@@ -1,0 +1,61 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --saffron: #FF7518;
+  --saffron-light: #FFA042;
+  --gold: #D4AF37;
+  --deep-teal: #0D5C63;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: #0c0a09;
+}
+
+h1, h2, h3 {
+  font-family: 'Playfair Display', serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #1c1917; }
+::-webkit-scrollbar-thumb { background: #57534e; border-radius: 3px; }
+
+/* Glassmorphism card */
+.glass {
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #FF7518, #D4AF37);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Leaflet container dark mode & custom styling */
+.leaflet-container {
+  background: #1c1917 !important;
+  font-family: inherit !important;
+}
+
+.leaflet-tooltip {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid rgba(0,0,0,0.08) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 20px -4px rgba(0, 0, 0, 0.3) !important;
+  padding: 6px 10px !important;
+}
+
+.leaflet-tooltip-top:before {
+  border-top-color: #ffffff !important;
+}

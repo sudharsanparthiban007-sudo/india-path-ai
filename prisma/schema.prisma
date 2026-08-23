@@ -1,0 +1,135 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id         Int         @id @default(autoincrement())
+  email      String      @unique
+  name       String?
+  password   String      // bcrypt hash
+  trips      Trip[]
+  complaints Complaint[]
+  bookings   Booking[]
+  payments   Payment[]
+  favorites  Favorite[]
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model PointOfInterest {
+  id          Int        @id @default(autoincrement())
+  name        String
+  category    String     // heritage | temple | beach | transit | nature
+  city        String
+  lat         Float
+  lng         Float
+  description String
+  transitInfo String
+  bookings    Booking[]
+  favorites   Favorite[]
+  createdAt   DateTime   @default(now())
+}
+
+model Trip {
+  id          Int      @id @default(autoincrement())
+  destination String
+  days        Int
+  interests   String   // JSON array stored as string
+  itinerary   String   // JSON stored as string
+  language    String   @default("en")
+  userId      Int?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}
+
+model Complaint {
+  id           Int      @id @default(autoincrement())
+  description  String
+  photoData    String?  // base64 or null
+  lat          Float?
+  lng          Float?
+  locationNote String?
+  department   String   @default("Tourism Services")
+  urgency      String   @default("Medium")
+  status       String   @default("Submitted") // Submitted | In Review | Resolved
+  isMock       Boolean  @default(false)
+  userId       Int?
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model SosIncident {
+  id        Int      @id @default(autoincrement())
+  lat       Float?
+  lng       Float?
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+model Booking {
+  id              Int              @id @default(autoincrement())
+  userId          Int
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  poiId           Int?
+  poi             PointOfInterest? @relation(fields: [poiId], references: [id], onDelete: SetNull)
+  poiName         String
+  bookingDate     String           // e.g. "2026-08-25"
+  timeSlot        String?          // e.g. "09:00 AM - 12:00 PM"
+  ticketCount     Int              @default(1)
+  amount          Float            // in INR
+  currency        String           @default("INR")
+  status          String           @default("confirmed") // pending | confirmed | cancelled
+  stripeSessionId String?
+  isTestMode      Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model CulturalEvent {
+  id          Int      @id @default(autoincrement())
+  name        String
+  category    String   // festival | dance | music | temple
+  city        String
+  month       String   // e.g. "January", "February", "March", ...
+  season      String   // e.g. "Winter / Harvest", "Chithirai / Summer", etc.
+  description String
+  highlight   String?
+  createdAt   DateTime @default(now())
+}
+
+model Payment {
+  id                    Int      @id @default(autoincrement())
+  userId                Int?     @map("user_id")
+  user                  User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  stripePaymentIntentId String   @unique @map("stripe_payment_intent_id")
+  amount                Float    @map("amount")
+  currency              String   @default("inr") @map("currency")
+  status                String   @default("pending") @map("status") // pending | paid | failed | cancelled
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  @@map("payments")
+}
+
+model Favorite {
+  id        Int             @id @default(autoincrement())
+  userId    Int             @map("user_id")
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  poiId     Int             @map("poi_id")
+  poi       PointOfInterest @relation(fields: [poiId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now()) @map("created_at")
+
+  @@unique([userId, poiId])
+  @@map("favorites")
+}
+
+
+
