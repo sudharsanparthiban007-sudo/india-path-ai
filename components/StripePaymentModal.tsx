@@ -74,6 +74,15 @@ export default function StripePaymentModal({
         body: JSON.stringify({
           paymentIntentId,
           paymentMethod: 'pm_card_visa', // Standard Stripe Sandbox test payment method
+          metadata: {
+            poiId: poi.id,
+            poiName: poi.name,
+            category: poi.category,
+            bookingDate,
+            timeSlot,
+            ticketCount,
+            amount: totalAmount,
+          },
         }),
       });
 

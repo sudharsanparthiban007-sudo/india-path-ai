@@ -72,6 +72,7 @@ function PlannerContent() {
   const [isMock, setIsMock] = useState(false);
   const [savedTrips, setSavedTrips] = useState<SavedTrip[]>([]);
   const [matchingEvents, setMatchingEvents] = useState<CulturalEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/planner')
@@ -104,23 +105,58 @@ function PlannerContent() {
     );
 
   const generate = async () => {
+    if (!destination) {
+      setError('Please select a destination.');
+      return;
+    }
+    if (interests.length === 0) {
+      setError('Please select at least one interest.');
+      return;
+    }
+
     setLoading(true);
     setItinerary(null);
+    setError(null);
+
     try {
       const res = await fetch('/api/planner', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ destination, days, interests, language: lang }),
+        body: JSON.stringify({
+          destination,
+          travelMonth,
+          days,
+          interests,
+          language: lang,
+        }),
       });
+
       const data = await res.json();
-      if (data.itinerary?.days) {
-        setItinerary(data.itinerary.days);
-        setActiveDay(0);
-        setIsMock(data.mock);
-        setSavedTrips((prev) => [data.trip, ...prev]);
+
+      let parsedItinerary = data.itinerary;
+      if (typeof parsedItinerary === 'string') {
+        try {
+          parsedItinerary = JSON.parse(parsedItinerary);
+        } catch (parseErr) {
+          console.warn('Failed to parse itinerary JSON string:', parseErr);
+        }
       }
-    } catch (e) {
-      console.error(e);
+
+      if (parsedItinerary?.days && Array.isArray(parsedItinerary.days)) {
+        setItinerary(parsedItinerary.days);
+        setActiveDay(0);
+        setIsMock(Boolean(data.mock));
+        if (data.trip) {
+          setSavedTrips((prev) => [data.trip, ...prev.filter((t) => t.id !== data.trip.id)]);
+        }
+      } else if (data.error) {
+        setError(data.error);
+      } else {
+        setError('Could not generate an itinerary. Please try again.');
+      }
+    } catch (e: any) {
+      console.error('Planner error:', e);
+      setError('Network or server error while generating itinerary. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -228,6 +264,13 @@ function PlannerContent() {
             ))}
           </div>
         </div>
+
+        {error && (
+          <div className="mb-4 p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-center gap-2">
+            <span>⚠️</span>
+            <span>{error}</span>
+          </div>
+        )}
 
         <button
           id="planner-generate-btn"

@@ -2,28 +2,19 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 
+// In-memory fallback payment store
+export const inMemoryPayments: any[] = [];
+
 export async function GET() {
   try {
     const session = await auth();
     const userId = session?.user?.id ? Number(session.user.id) : null;
 
     if (!userId) {
-      // If not logged in, return latest sample test records or empty
-      try {
-        const demoPayments = await prisma.payment.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-        });
-        return NextResponse.json({
-          payments: demoPayments || [],
-          isAuthenticated: false,
-        });
-      } catch {
-        return NextResponse.json({
-          payments: [],
-          isAuthenticated: false,
-        });
-      }
+      return NextResponse.json({
+        payments: [],
+        isAuthenticated: false,
+      });
     }
 
     // Security: Only return payments belonging to the authenticated user
@@ -38,8 +29,9 @@ export async function GET() {
         isAuthenticated: true,
       });
     } catch {
+      const userPayments = inMemoryPayments.filter((p) => p.userId === userId);
       return NextResponse.json({
-        payments: [],
+        payments: userPayments,
         isAuthenticated: true,
       });
     }

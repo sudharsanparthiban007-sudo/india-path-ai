@@ -2,36 +2,79 @@ import type { Language } from './i18n';
 
 const MODEL = 'gemini-2.5-flash';
 
-function isMock(): boolean {
-  const key = process.env.GEMINI_API_KEY;
-  return !key || key.trim() === '';
-}
-
-function getApiKey(): string {
-  return process.env.GEMINI_API_KEY!;
-}
-
-async function generateContentWithFallback(
-  ai: any,
-  params: { model: string; contents: any }
-) {
-  try {
-    return await ai.models.generateContent(params);
-  } catch (err: any) {
-    if (
-      err?.status === 404 ||
-      (typeof err?.message === 'string' &&
-        (err.message.includes('gemini-3.6-flash') ||
-          err.message.includes('NOT_FOUND') ||
-          err.message.includes('no longer available')))
-    ) {
-      return await ai.models.generateContent({
-        ...params,
-        model: 'gemini-3.6-flash',
-      });
-    }
-    throw err;
+function getActiveGeminiKey(): { type: 'google' | 'openrouter' | null; key: string } {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  if (
+    geminiKey &&
+    geminiKey.trim() !== '' &&
+    geminiKey.trim() !== 'your-gemini-api-key' &&
+    geminiKey.trim() !== 'YOUR_GEMINI_API_KEY_HERE' &&
+    !geminiKey.includes('YOUR_GEMINI_API_KEY')
+  ) {
+    return { type: 'google', key: geminiKey.trim() };
   }
+
+  const openrouterKey = process.env.OPENROUTERAI_API_KEY || process.env.OPENROUTER_API_KEY;
+  if (
+    openrouterKey &&
+    openrouterKey.trim() !== '' &&
+    openrouterKey.trim() !== 'sk-or-v1-...' &&
+    openrouterKey.startsWith('sk-or-')
+  ) {
+    return { type: 'openrouter', key: openrouterKey.trim() };
+  }
+
+  return { type: null, key: '' };
+}
+
+function isMock(): boolean {
+  const active = getActiveGeminiKey();
+  return active.type === null;
+}
+
+async function callGeminiChat(systemInstruction: string, prompt: string): Promise<string> {
+  const active = getActiveGeminiKey();
+
+  if (active.type === 'google') {
+    const { GoogleGenAI } = await import('@google/genai');
+    const ai = new GoogleGenAI({ apiKey: active.key });
+    const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
+    const response = await generateContentWithFallback(ai, {
+      model: MODEL,
+      contents: fullPrompt,
+    });
+    return response.text ?? '';
+  }
+
+  if (active.type === 'openrouter') {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${active.key}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'http://localhost:3000',
+        'X-Title': 'India Path AI',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        max_tokens: 3000,
+        messages: [
+          ...(systemInstruction ? [{ role: 'system', content: systemInstruction }] : []),
+          { role: 'user', content: prompt },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenRouter Gemini error (${res.status}): ${errText}`);
+    }
+
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content ?? '';
+  }
+
+  throw new Error('Gemini API is not configured. Please add GEMINI_API_KEY to .env.local.');
 }
 
 // ─── Trip Planner ────────────────────────────────────────────────────────────
@@ -39,21 +82,25 @@ export async function generateItinerary(
   destination: string,
   days: number,
   interests: string[],
-  language: Language
+  language: Language,
+  travelMonth?: string
 ): Promise<{ content: string; mock: boolean }> {
   if (isMock()) {
     return { content: getMockItinerary(destination, days, language), mock: true };
   }
 
   try {
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
     const langName = language === 'ta' ? 'Tamil' : language === 'hi' ? 'Hindi' : 'English';
-    const prompt = `You are a Tamil Nadu heritage travel expert. Create a detailed ${days}-day itinerary for ${destination}, Tamil Nadu, India.
+    const monthContext = travelMonth && travelMonth !== 'Any Month'
+      ? `The planned travel month is ${travelMonth}. Tailor the recommendations to seasonal weather, festivals, and appropriate times of day for ${travelMonth}.`
+      : '';
+
+    const systemInstruction = `You are a Tamil Nadu heritage travel expert. Always output valid JSON only, without any markdown code fence wrappers or extra conversational text.`;
+    const prompt = `Create a detailed ${days}-day itinerary for ${destination}, Tamil Nadu, India.
 Traveller interests: ${interests.join(', ')}.
+${monthContext}
 Respond entirely in ${langName}.
-Format as JSON with this structure:
+Format strictly as JSON with this structure:
 {
   "days": [
     {
@@ -67,19 +114,14 @@ Format as JSON with this structure:
     }
   ]
 }
-Only output valid JSON, no extra text.`;
+Only output valid JSON.`;
 
-    const response = await generateContentWithFallback(ai, {
-      model: MODEL,
-      contents: prompt,
-    });
-
-    const text = response.text ?? '';
+    const text = await callGeminiChat(systemInstruction, prompt);
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     return { content: cleaned, mock: false };
-  } catch (err) {
-    console.warn('[AI Planner Fallback to Mock]:', err);
-    return { content: getMockItinerary(destination, days, language), mock: true };
+  } catch (err: any) {
+    console.error('[AI Planner Error]:', err);
+    throw err;
   }
 }
 
@@ -93,34 +135,84 @@ export async function analyzeHeritageImage(
     return { content: getMockHeritageAnalysis(language), mock: true };
   }
 
+  const active = getActiveGeminiKey();
+  const langName = language === 'ta' ? 'Tamil' : language === 'hi' ? 'Hindi' : 'English';
+
+  const systemInstruction = `You are "India Path AI Heritage Lens", an expert South Indian and Tamil Nadu archaeologist and art historian.
+Analyze the uploaded image of a monument, temple, sculpture, architectural element, or inscription.
+
+Structure your response clearly in ${langName} with the following distinct sections:
+1. **Monument / Landmark Identification**: Name the structure, location, or deity depicted (or best estimate).
+2. **Approximate Period / Date**: Dynasty (e.g. Pallava, Chola, Pandya, Vijayanagara, Nayak) and estimated century.
+3. **Historical Context**: Who commissioned it, historical background, and historical events associated with it.
+4. **Cultural & Architectural Significance**: Dravidian architectural style, gopuram/vimana style, iconographic features, or inscriptions.
+5. **Interesting Facts**: 2-3 fascinating facts or legends about the site.
+6. **Identification Confidence**: State your confidence level (High, Moderate, Tentative) and note any uncertainty or ambiguity.
+
+Format using bold headers and clean markdown bullet points.`;
+
+  const prompt = `Please analyze this image and provide comprehensive heritage details according to the required sections. Respond entirely in ${langName}.`;
+
   try {
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    if (active.type === 'google') {
+      const { GoogleGenAI } = await import('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: active.key });
 
-    const langName = language === 'ta' ? 'Tamil' : language === 'hi' ? 'Hindi' : 'English';
-    const prompt = `You are a Tamil Nadu heritage expert. Analyse the uploaded image and provide:
-1. General description of what is depicted
-2. Historical and cultural context
-3. Any notable architectural features, symbols, or inscriptions you can identify
+      const response = await generateContentWithFallback(ai, {
+        model: MODEL,
+        contents: [
+          {
+            parts: [
+              { text: `${systemInstruction}\n\n${prompt}` },
+              { inlineData: { mimeType, data: base64Image } },
+            ],
+          },
+        ],
+      });
 
-Respond entirely in ${langName}. Be informative and educational but appropriately cautious — note when you are uncertain.`;
+      return { content: response.text ?? '', mock: false };
+    }
 
-    const response = await generateContentWithFallback(ai, {
-      model: MODEL,
-      contents: [
-        {
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType, data: base64Image } },
-          ],
+    if (active.type === 'openrouter') {
+      const dataUrl = `data:${mimeType};base64,${base64Image}`;
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${active.key}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'http://localhost:3000',
+          'X-Title': 'India Path AI',
         },
-      ],
-    });
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-flash',
+          max_tokens: 3000,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: dataUrl } },
+              ],
+            },
+          ],
+        }),
+      });
 
-    return { content: response.text ?? '', mock: false };
-  } catch (err) {
-    console.warn('[AI Lens Fallback to Mock]:', err);
-    return { content: getMockHeritageAnalysis(language), mock: true };
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`OpenRouter Gemini Vision error (${res.status}): ${errText}`);
+      }
+
+      const data = await res.json();
+      const content = data?.choices?.[0]?.message?.content ?? '';
+      return { content, mock: false };
+    }
+
+    throw new Error('Gemini API is not configured.');
+  } catch (err: any) {
+    console.error('[AI Lens Error]:', err);
+    throw err;
   }
 }
 
@@ -138,30 +230,55 @@ export async function classifyComplaint(
   }
 
   try {
-    const { GoogleGenAI } = await import('@google/genai');
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
+    const systemInstruction = `You are an automated government dispatch classifier for Tamil Nadu Tourism. Classify the tourist complaint accurately. Always output valid JSON only.`;
     const prompt = `Classify the following tourist complaint for Tamil Nadu government routing.
 Complaint: "${description}"
 
-Respond with JSON only:
+Respond strictly with valid JSON only in this format:
 {
-  "department": "one of: Transport Infrastructure, Sanitation, Safety & Security, Heritage Site Maintenance, Tourism Services",
-  "urgency": "one of: Low, Medium, High, Critical"
+  "department": "Transport Infrastructure | Sanitation | Safety & Security | Heritage Site Maintenance | Tourism Services",
+  "urgency": "Low | Medium | High | Critical"
 }`;
 
-    const response = await generateContentWithFallback(ai, {
-      model: MODEL,
-      contents: prompt,
-    });
-
-    const text = response.text ?? '{}';
+    const text = await callGeminiChat(systemInstruction, prompt);
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-    return { department: parsed.department, urgency: parsed.urgency, mock: false };
-  } catch (err) {
-    console.warn('[AI Complaint Classification Fallback to Mock]:', err);
-    return { department: 'Tourism Services', urgency: 'Medium', mock: true };
+    
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      // Fallback extraction if JSON has surrounding text
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsed = JSON.parse(jsonMatch[0]);
+      } else {
+        parsed = {};
+      }
+    }
+
+    const validDepts = [
+      'Transport Infrastructure',
+      'Sanitation',
+      'Safety & Security',
+      'Heritage Site Maintenance',
+      'Tourism Services',
+    ];
+    const validUrgencies = ['Low', 'Medium', 'High', 'Critical'];
+
+    const department = validDepts.includes(parsed.department)
+      ? parsed.department
+      : 'Tourism Services';
+    const urgency = validUrgencies.includes(parsed.urgency) ? parsed.urgency : 'Medium';
+
+    return { department, urgency, mock: false };
+  } catch (err: any) {
+    console.error('[AI Complaint Classification Error]:', err);
+    // Fallback to sensible defaults on AI error rather than crashing
+    return {
+      department: 'Tourism Services',
+      urgency: 'Medium',
+      mock: true,
+    };
   }
 }
 

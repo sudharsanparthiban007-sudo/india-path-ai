@@ -120,23 +120,35 @@ export async function POST(req: NextRequest) {
         ).join('\n\n')
       : 'No specific in-app POI directly matched this query. Use general knowledge about Tamil Nadu tourism.';
 
-    // ─── 3. Check for Gemini API Key or fallback to mock ─────────────────────
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey.trim() === '') {
-      const mockReply = generateMockAssistantReply(message, matchedPois, lang);
-      return NextResponse.json({
-        content: mockReply,
-        isEmergency: false,
-        groundedPois: matchedPois.map((p) => p.name),
-        mock: true,
-      });
+    // ─── 3. Check for Gemini / AI API Key ───────────────────────────────────
+    const geminiKey = process.env.GEMINI_API_KEY;
+    const hasGeminiKey =
+      geminiKey &&
+      geminiKey.trim() !== '' &&
+      geminiKey.trim() !== 'your-gemini-api-key' &&
+      geminiKey.trim() !== 'YOUR_GEMINI_API_KEY_HERE' &&
+      !geminiKey.includes('YOUR_GEMINI_API_KEY');
+
+    const openrouterKey = process.env.OPENROUTERAI_API_KEY || process.env.OPENROUTER_API_KEY;
+    const hasOpenrouterKey =
+      openrouterKey &&
+      openrouterKey.trim() !== '' &&
+      openrouterKey.trim() !== 'sk-or-v1-...' &&
+      openrouterKey.startsWith('sk-or-');
+
+    if (!hasGeminiKey && !hasOpenrouterKey) {
+      return NextResponse.json(
+        {
+          error:
+            'Gemini AI is not configured. Please add your GEMINI_API_KEY to .env.local and restart the server.',
+          mock: false,
+        },
+        { status: 503 }
+      );
     }
 
-    // ─── 4. Call Gemini AI ──────────────────────────────────────────────────
+    // ─── 4. Call Gemini AI (Direct or OpenRouter) ───────────────────────────
     try {
-      const { GoogleGenAI } = await import('@google/genai');
-      const ai = new GoogleGenAI({ apiKey });
-
       const langName = lang === 'ta' ? 'Tamil' : lang === 'hi' ? 'Hindi' : 'English';
 
       const systemInstruction = `You are "India Path AI Travel Guide", a knowledgeable, warm, and helpful AI tourism assistant specializing in Tamil Nadu heritage travel.
@@ -153,38 +165,79 @@ INSTRUCTIONS:
 5. If the user asks for emergency, medical, or safety assistance, redirect them immediately to emergency number 112 and the in-app SOS tab.
 6. Respond entirely and fluently in ${langName}. Use clear markdown formatting with bullet points and bold headers.`;
 
-      // Build conversation history format
-      const formattedHistory = history.map((h: { role: string; content: string }) => ({
-        role: h.role === 'user' ? 'user' : 'model',
-        parts: [{ text: h.content }],
-      }));
+      let replyText = '';
 
-      const contents = [
-        ...formattedHistory,
-        { role: 'user', parts: [{ text: message }] },
-      ];
+      if (hasGeminiKey) {
+        const { GoogleGenAI } = await import('@google/genai');
+        const ai = new GoogleGenAI({ apiKey: geminiKey!.trim() });
 
-      let response;
-      try {
-        response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents,
-          config: {
-            systemInstruction: { parts: [{ text: systemInstruction }] },
+        const formattedHistory = history.map((h: { role: string; content: string }) => ({
+          role: h.role === 'user' ? 'user' : 'model',
+          parts: [{ text: h.content }],
+        }));
+
+        const contents = [
+          ...formattedHistory,
+          { role: 'user', parts: [{ text: message }] },
+        ];
+
+        let response;
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents,
+            config: {
+              systemInstruction: { parts: [{ text: systemInstruction }] },
+            },
+          });
+        } catch {
+          response = await ai.models.generateContent({
+            model: 'gemini-1.5-flash',
+            contents,
+            config: {
+              systemInstruction: { parts: [{ text: systemInstruction }] },
+            },
+          });
+        }
+
+        replyText = response.text || '';
+      } else if (hasOpenrouterKey) {
+        const orMessages = [
+          { role: 'system', content: systemInstruction },
+          ...history.map((h: { role: string; content: string }) => ({
+            role: h.role === 'user' ? 'user' : 'assistant',
+            content: h.content,
+          })),
+          { role: 'user', content: message },
+        ];
+
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openrouterKey!.trim()}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'http://localhost:3000',
+            'X-Title': 'India Path AI',
           },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash',
+            max_tokens: 3000,
+            messages: orMessages,
+          }),
         });
-      } catch (geminiErr: any) {
-        // Fallback to gemini-3.6-flash if 2.5 is unavailable
-        response = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
-          contents,
-          config: {
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-          },
-        });
+
+        if (!res.ok) {
+          const errBody = await res.text();
+          throw new Error(`OpenRouter Gemini API error (${res.status}): ${errBody}`);
+        }
+
+        const data = await res.json();
+        replyText = data?.choices?.[0]?.message?.content || '';
       }
 
-      const replyText = response.text || 'I could not generate a response. Please try rephrasing your question.';
+      if (!replyText) {
+        replyText = 'I could not generate a response. Please try rephrasing your question.';
+      }
 
       return NextResponse.json({
         content: replyText,
@@ -192,15 +245,26 @@ INSTRUCTIONS:
         groundedPois: matchedPois.map((p) => p.name),
         mock: false,
       });
-    } catch (aiError) {
-      console.warn('Gemini AI Assistant error, falling back to mock:', aiError);
-      const mockReply = generateMockAssistantReply(message, matchedPois, lang);
-      return NextResponse.json({
-        content: mockReply,
-        isEmergency: false,
-        groundedPois: matchedPois.map((p) => p.name),
-        mock: true,
-      });
+    } catch (aiError: any) {
+      console.error('Gemini AI Assistant error:', aiError);
+      const msg = aiError?.message || String(aiError);
+      // Surface meaningful errors instead of silently mocking
+      if (msg.includes('API_KEY') || msg.includes('PERMISSION_DENIED') || msg.includes('401') || msg.includes('403')) {
+        return NextResponse.json(
+          { error: 'Gemini API key is invalid or does not have permission. Check GEMINI_API_KEY in .env.local.' },
+          { status: 401 }
+        );
+      }
+      if (msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
+        return NextResponse.json(
+          { error: 'Gemini API quota exceeded. Please try again later or check your billing.' },
+          { status: 429 }
+        );
+      }
+      return NextResponse.json(
+        { error: `AI Assistant error: ${msg}` },
+        { status: 500 }
+      );
     }
   } catch (error) {
     console.error('Ask Assistant API error:', error);

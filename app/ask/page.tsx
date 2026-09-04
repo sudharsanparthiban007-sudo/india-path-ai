@@ -94,10 +94,14 @@ export default function AskPage() {
 
       const data = await res.json();
 
+      // Surface server-side errors (missing key, quota, etc.) as chat messages
       const assistantMsg: Message = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
-        content: data.content || 'I could not generate a response. Please try again.',
+        content:
+          data.error
+            ? `⚠️ ${data.error}`
+            : data.content || 'I could not generate a response. Please try again.',
         isEmergency: data.isEmergency,
         groundedPois: data.groundedPois,
         mock: data.mock,
@@ -240,12 +244,6 @@ export default function AskPage() {
 
                   {/* Body Text */}
                   <div className="whitespace-pre-wrap">{m.content}</div>
-
-                  {m.mock && (
-                    <div className="mt-3 text-xs text-amber-400/80">
-                      ⚡ Demo mock response — add GEMINI_API_KEY for live AI
-                    </div>
-                  )}
                 </div>
               </div>
             );

@@ -2,33 +2,40 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 
+// In-memory fallback booking store by userId/email
+export const inMemoryBookings: any[] = [];
+
 export async function GET() {
   try {
     const session = await auth();
-    const userId = session?.user?.id ? Number(session.user.id) : null;
+    const sessionUserId = session?.user?.id ? Number(session.user.id) : null;
+    const sessionUserEmail = session?.user?.email ? String(session.user.email).toLowerCase() : null;
 
-    if (!userId) {
-      // If not logged in, check for latest bookings or return guest message
-      try {
-        const bookings = await prisma.booking.findMany({
-          orderBy: { createdAt: 'desc' },
-          take: 5,
-        });
-        return NextResponse.json({ bookings: bookings || [], isAuthenticated: false });
-      } catch {
-        return NextResponse.json({ bookings: [], isAuthenticated: false });
-      }
+    if (!sessionUserId && !sessionUserEmail) {
+      return NextResponse.json({ bookings: [], isAuthenticated: false });
     }
 
+    let bookings: any[] = [];
     try {
-      const bookings = await prisma.booking.findMany({
-        where: { userId },
+      bookings = await prisma.booking.findMany({
+        where: sessionUserId ? { userId: sessionUserId } : undefined,
         orderBy: { createdAt: 'desc' },
       });
-      return NextResponse.json({ bookings: bookings || [], isAuthenticated: true });
     } catch {
-      return NextResponse.json({ bookings: [], isAuthenticated: true });
+      bookings = [];
     }
+
+    if (bookings && bookings.length > 0) {
+      return NextResponse.json({ bookings, isAuthenticated: true });
+    }
+
+    const userBookings = inMemoryBookings.filter(
+      (b) =>
+        (sessionUserId && b.userId === sessionUserId) ||
+        (sessionUserEmail && b.userEmail === sessionUserEmail)
+    );
+
+    return NextResponse.json({ bookings: userBookings, isAuthenticated: true });
   } catch (error) {
     console.error('Fetch bookings error:', error);
     return NextResponse.json({ bookings: [], isAuthenticated: false });
@@ -38,7 +45,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const session = await auth();
-    let userId = session?.user?.id ? Number(session.user.id) : null;
+    const sessionUserId = session?.user?.id ? Number(session.user.id) : null;
+    const sessionUserEmail = session?.user?.email ? String(session.user.email).toLowerCase() : null;
+    const userId = sessionUserId || 1;
 
     const body = await req.json();
     const {
@@ -58,27 +67,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // If user is not authenticated, check or create demo guest account
-    if (!userId) {
-      let guest = await prisma.user.findUnique({
-        where: { email: 'traveler@indiapath.ai' },
+    let booking: any = null;
+    try {
+      booking = await prisma.booking.create({
+        data: {
+          userId,
+          poiId: poiId ? Number(poiId) : null,
+          poiName,
+          bookingDate,
+          timeSlot: timeSlot || 'General Entry',
+          ticketCount: Number(ticketCount),
+          amount: Number(amount),
+          currency: 'INR',
+          status: 'confirmed',
+          stripeSessionId: stripeSessionId || null,
+          isTestMode: true,
+        },
       });
-
-      if (!guest) {
-        guest = await prisma.user.create({
-          data: {
-            name: 'Demo Traveler',
-            email: 'traveler@indiapath.ai',
-            password: '$2a$10$demohashplaceholderforprototypetestmodeonly',
-          },
-        });
-      }
-      userId = guest.id;
-    }
-
-    const booking = await prisma.booking.create({
-      data: {
+    } catch (dbErr) {
+      console.warn('[Bookings] DB write error, saving to memory:', dbErr);
+      booking = {
+        id: Date.now(),
         userId,
+        userEmail: sessionUserEmail,
         poiId: poiId ? Number(poiId) : null,
         poiName,
         bookingDate,
@@ -89,8 +100,10 @@ export async function POST(req: NextRequest) {
         status: 'confirmed',
         stripeSessionId: stripeSessionId || null,
         isTestMode: true,
-      },
-    });
+        createdAt: new Date().toISOString(),
+      };
+      inMemoryBookings.unshift(booking);
+    }
 
     return NextResponse.json({ booking, message: 'Booking confirmed successfully (Test Mode)' });
   } catch (error) {

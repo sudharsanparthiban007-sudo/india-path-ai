@@ -18,15 +18,17 @@ export default function ComplaintPage() {
   const [lng, setLng] = useState<number | null>(null);
   const [locationNote, setLocationNote] = useState('');
   const [loading, setLoading] = useState(false);
+  const [gpsLoading, setGpsLoading] = useState(false);
   const [result, setResult] = useState<{
     department: string;
     urgency: string;
     id: number;
     mock: boolean;
   } | null>(null);
-  const [gpsLoading, setGpsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handlePhoto = (file: File) => {
+    setError(null);
     const reader = new FileReader();
     reader.onload = (e) => {
       const dataUrl = e.target?.result as string;
@@ -36,8 +38,17 @@ export default function ComplaintPage() {
     reader.readAsDataURL(file);
   };
 
+  const removePhoto = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPhotoPreview(null);
+    setPhotoData(null);
+    const input = document.getElementById('complaint-photo-input') as HTMLInputElement;
+    if (input) input.value = '';
+  };
+
   const getGPS = async () => {
     setGpsLoading(true);
+    setError(null);
     if (Capacitor.isNativePlatform()) {
       try {
         const pos = await Geolocation.getCurrentPosition({
@@ -68,21 +79,37 @@ export default function ComplaintPage() {
   const submit = async () => {
     if (!description.trim()) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch('/api/complaint', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, photoData, lat, lng, locationNote, language: lang }),
+        body: JSON.stringify({
+          description: description.trim(),
+          photoData,
+          lat,
+          lng,
+          locationNote: locationNote.trim(),
+          language: lang,
+        }),
       });
+
       const data = await res.json();
+
+      if (!res.ok || data.error || !data.complaint) {
+        setError(data.error || 'Failed to submit report. Please try again.');
+        return;
+      }
+
       setResult({
-        department: data.complaint.department,
-        urgency: data.complaint.urgency,
-        id: data.complaint.id,
-        mock: data.mock,
+        department: data.complaint.department || 'Tourism Services',
+        urgency: data.complaint.urgency || 'Medium',
+        id: data.complaint.id || Date.now(),
+        mock: Boolean(data.mock),
       });
-    } catch (e) {
-      console.error(e);
+    } catch (e: unknown) {
+      console.error('Complaint submission error:', e);
+      setError('Network or server error while submitting report. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -107,7 +134,7 @@ export default function ComplaintPage() {
       <div
         id="complaint-proto-banner"
         className="sticky top-16 z-40 bg-amber-600/90 text-white text-center py-3 px-4 text-sm font-medium backdrop-blur"
-      >
+      > 
         ⚠️ {t('complaint_proto_banner')}
       </div>
 
@@ -160,6 +187,17 @@ export default function ComplaintPage() {
           </div>
         ) : (
           <div className="glass rounded-2xl p-6 space-y-5">
+            {/* Error Message */}
+            {error && (
+              <div className="p-4 bg-red-950/80 border border-red-500/60 rounded-xl text-red-200 text-sm flex items-start gap-3">
+                <span className="text-xl flex-shrink-0">⚠️</span>
+                <div>
+                  <p className="font-semibold text-xs text-red-300 mb-0.5">Submission Error</p>
+                  <p className="text-xs text-red-200">{error}</p>
+                </div>
+              </div>
+            )}
+
             {/* Photo upload */}
             <div>
               <label className="block text-sm font-medium text-stone-400 mb-2">
@@ -167,26 +205,35 @@ export default function ComplaintPage() {
               </label>
               <div
                 onClick={() => document.getElementById('complaint-photo-input')?.click()}
-                className="border-2 border-dashed border-stone-700 rounded-xl p-4 cursor-pointer hover:border-orange-500/50 transition-colors text-center"
+                className="relative border-2 border-dashed border-stone-700 rounded-xl p-4 cursor-pointer hover:border-orange-500/50 transition-colors text-center"
               >
                 {photoPreview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={photoPreview}
-                    alt="Preview"
-                    className="max-h-40 mx-auto rounded-lg object-contain"
-                  />
+                  <div className="relative inline-block max-w-full">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={photoPreview}
+                      alt="Preview"
+                      className="max-h-40 mx-auto rounded-lg object-contain"
+                    />
+                    <button
+                      onClick={removePhoto}
+                      title="Remove photo"
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-600 hover:bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs shadow"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 ) : (
                   <div className="text-stone-500 text-sm py-4">
                     <span className="text-2xl block mb-2">📷</span>
-                    Click to add a photo
+                    Click or tap to add a photo
                   </div>
                 )}
               </div>
               <input
                 id="complaint-photo-input"
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp,image/*"
                 className="hidden"
                 onChange={(e) => {
                   if (e.target.files?.[0]) handlePhoto(e.target.files[0]);

@@ -254,12 +254,6 @@ export default function AskAssistantWidget() {
 
                     {/* Message content */}
                     <div className="whitespace-pre-wrap text-[13px]">{m.content}</div>
-
-                    {m.mock && (
-                      <div className="mt-2 text-[10px] text-amber-400/80">
-                        ⚡ Offline mock response
-                      </div>
-                    )}
                   </div>
                 </div>
               );

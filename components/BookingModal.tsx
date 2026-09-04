@@ -41,7 +41,7 @@ export default function BookingModal({ poi, onClose }: BookingModalProps) {
   };
 
   const handlePaymentSuccess = () => {
-    // Navigates or refreshes passes
+    router.push('/bookings');
   };
 
   return (

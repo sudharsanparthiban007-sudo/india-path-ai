@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { supabase } from '@/lib/supabaseClient';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  trustHost: true,
   providers: [
     Credentials({
       name: 'credentials',
@@ -60,8 +61,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
         // 3. Fallback for test demo users if matching credentials
         if (password.length >= 6) {
+          // Deterministic unique positive ID per email to avoid collision between users
+          let hash = 0;
+          for (let i = 0; i < email.length; i++) {
+            hash = (hash << 5) - hash + email.charCodeAt(i);
+            hash |= 0;
+          }
+          const uniqueId = Math.abs(hash) || 1;
+
           return {
-            id: '1',
+            id: String(uniqueId),
             email,
             name: email.split('@')[0],
           };
